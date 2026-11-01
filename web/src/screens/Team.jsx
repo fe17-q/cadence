@@ -3,6 +3,7 @@ import { del, patch, post } from '../api.js';
 import { useStore } from '../store.jsx';
 import { Avatar, Button, Icon, Sheet } from '../ui.jsx';
 import { usePush } from './Notifications.jsx';
+import { GooglePanel } from './Docs.jsx';
 
 export function inviteUrl(team) { return `${location.origin}/join/${team.invite_code}`; }
 
@@ -99,6 +100,11 @@ export function TeamScreen({ openCanvas, openInvite }) {
         </div>
       </section>
 
+      <section className="section" id="google">
+        <div className="section__head"><h2 className="section__title">Google Docs</h2></div>
+        <GooglePanel />
+      </section>
+
       <section className="section">
         <div className="section__head"><h2 className="section__title">Reminders</h2></div>
         <div className="panel">
@@ -155,13 +161,16 @@ function ProfileSheet({ open, onClose, onSaved }) {
   const { user, refresh } = useStore();
   const [name, setName] = useState(user.name);
   const [color, setColor] = useState(user.color);
+  const [gmail, setGmail] = useState(user.google_email || '');
   return (
     <Sheet open={open} onClose={onClose} title="Your profile">
       <div className="stack">
         <div className="center"><Avatar user={{ ...user, name, color }} size={72} /></div>
         <label className="field"><span className="field__label">Name</span><input className="field__input" value={name} onChange={e => setName(e.target.value)} /></label>
+        <label className="field"><span className="field__label">Google account (if different from {user.email})</span>
+          <input className="field__input" type="email" value={gmail} onChange={e => setGmail(e.target.value)} placeholder="you@gmail.com" autoCapitalize="off" /></label>
         <div className="swatches">{COLORS.map(c => <button key={c} className={`swatch ${c === color ? 'is-on' : ''}`} style={{ background: c }} onClick={() => setColor(c)} aria-label={`Color ${c}`} />)}</div>
-        <Button onClick={async () => { await patch('/me', { name, color }); await Promise.all([onSaved(), refresh()]); onClose(); }}>Save</Button>
+        <Button onClick={async () => { await patch('/me', { name, color, google_email: gmail }); await Promise.all([onSaved(), refresh()]); onClose(); }}>Save</Button>
       </div>
     </Sheet>
   );

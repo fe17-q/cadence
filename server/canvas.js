@@ -78,7 +78,7 @@ function extractAttachments(html, base) {
   while ((m = re.exec(html || ''))) {
     let href = m[1].replace(/&amp;/g, '&');
     if (href.startsWith('/')) href = base + href;
-    const isFile = /\/files\/\d+/.test(href) || /\.(pdf|docx?|pptx?|xlsx?|zip|png|jpe?g|csv|txt|mp4)(\?|$)/i.test(href);
+    const isFile = /\/files\/\d+/.test(href) || /^https:\/\/(docs|drive)\.google\.com\//.test(href) || /\.(pdf|docx?|pptx?|xlsx?|zip|png|jpe?g|csv|txt|mp4)(\?|$)/i.test(href);
     if (!isFile) continue;
     const name = decodeEntities(m[2].replace(/<[^>]+>/g, '')).replace(/\s+/g, ' ').trim() || decodeURIComponent(href.split('/').pop().split('?')[0]);
     const clean = href.replace(/\/(download|preview)(\?.*)?$/, '').replace(/\?.*$/, '');

@@ -10,6 +10,8 @@ import { AssignmentScreen } from './screens/Assignment.jsx';
 import { TeamScreen, InviteSheet } from './screens/Team.jsx';
 import { CanvasConnect } from './screens/CanvasConnect.jsx';
 import { Inbox, PushNudge } from './screens/Notifications.jsx';
+import { DocsScreen } from './screens/Docs.jsx';
+import { useEffect } from 'react';
 
 function Splash() {
   return <div className="splash"><img src="/icon.svg" alt="" className="splash__mark" /><Spinner /></div>;
@@ -18,17 +20,24 @@ function Splash() {
 const TABS = [
   { path: '/', label: 'Today', icon: 'home' },
   { path: '/assignments', label: 'Assignments', icon: 'list' },
+  { path: '/docs', label: 'Docs', icon: 'file' },
   { path: '/team', label: 'Team', icon: 'users' },
 ];
 
 function Shell() {
-  const { me, team, board, path, navigate, toasts } = useStore();
+  const { me, team, board, path, navigate, toasts, toast, loadMe } = useStore();
   const [canvasOpen, setCanvasOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inboxOpen, setInboxOpen] = useState(false);
   const [pathname, query] = path.split('?');
   const params = new URLSearchParams(query || '');
   const join = /^\/join\/([\w-]+)/.exec(pathname)?.[1];
+
+  // returning from Google sign-in
+  useEffect(() => {
+    if (params.get('google') === 'connected') { toast('Google Drive connected ✨'); loadMe(); navigate(pathname, { replace: true }); }
+    else if (params.get('google_error')) { toast(params.get('google_error'), { tone: 'error', duration: 6000 }); navigate(pathname, { replace: true }); }
+  }, [query]);
 
   if (me === undefined) return <Splash />;
   if (me === null) return <><AuthScreen invite={join} /><Toasts toasts={toasts} /></>;
@@ -44,6 +53,7 @@ function Shell() {
   if (detail) screen = <AssignmentScreen key={detail} id={detail} taskId={params.get('task')} />;
   else if (tab === '/assignments') screen = <AssignmentsScreen />;
   else if (tab === '/team') screen = <TeamScreen {...open} />;
+  else if (tab === '/docs') screen = <DocsScreen openGoogle={() => navigate('/team')} />;
   else screen = <TodayScreen {...open} />;
 
   return (

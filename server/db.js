@@ -104,7 +104,27 @@ CREATE INDEX IF NOT EXISTS idx_notif_user ON notifications(user_id, created_at);
 
 // lightweight migrations
 const cols = t => db.prepare(`PRAGMA table_info(${t})`).all().map(c => c.name);
-if (!cols('teams').includes('tz')) db.exec('ALTER TABLE teams ADD COLUMN tz TEXT');
+const addCol = (t, c, type = 'TEXT') => { if (!cols(t).includes(c)) db.exec(`ALTER TABLE ${t} ADD COLUMN ${c} ${type}`); };
+addCol('teams', 'tz');
+for (const c of ['google_refresh_token', 'google_email', 'google_connected_by', 'google_folder_id', 'google_folder_url', 'google_error']) addCol('teams', c);
+addCol('assignments', 'google_folder_id');
+addCol('users', 'google_email');
+db.exec(`
+CREATE TABLE IF NOT EXISTS docs (
+  id TEXT PRIMARY KEY,
+  team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+  assignment_id TEXT REFERENCES assignments(id) ON DELETE SET NULL,
+  task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+  url TEXT NOT NULL,
+  title TEXT NOT NULL,
+  kind TEXT NOT NULL,          -- doc | sheet | slides | form | drawing | folder | file | pdf | link
+  google_id TEXT,
+  source TEXT NOT NULL,        -- link | picked | created
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_docs_team ON docs(team_id, created_at);
+`);
 
 export const id = () => crypto.randomUUID();
 export const token = (n = 32) => crypto.randomBytes(n).toString('base64url');

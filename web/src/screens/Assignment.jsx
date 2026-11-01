@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore, useDerived } from '../store.jsx';
 import { Avatar, AvatarStack, Button, Check, Icon, MemberPicker, Ring, Sheet } from '../ui.jsx';
+import { DocsSection, TaskDocs } from './Docs.jsx';
 import { fileKind, fromLocalInput, relDue, toLocalInput, urgency } from '../util.js';
 
 export function AssignmentScreen({ id, taskId }) {
@@ -53,6 +54,8 @@ export function AssignmentScreen({ id, taskId }) {
           <li className="composer-li"><Composer assignmentId={a.id} members={board.members} /></li>
         </ul>
       </section>
+
+      <DocsSection assignment={a} />
 
       {(a.description_html || a.attachments?.length > 0 || a.html_url) && (
         <section className="section">
@@ -243,6 +246,8 @@ function TaskSheet({ taskId, assignment, onClose }) {
             </ul>
           </div>
         )}
+
+        <TaskDocs task={task} />
 
         <div className="sheet-block">
           <span className="sheet-block__label">Notes</span>

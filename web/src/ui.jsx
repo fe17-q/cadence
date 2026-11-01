@@ -106,7 +106,7 @@ export function Button({ variant = 'primary', loading, children, className = '',
 
 export const Spinner = ({ size = 18 }) => <span className="spinner" style={{ width: size, height: size }} />;
 
-export function Sheet({ open, onClose, title, children, footer, tall = false }) {
+export function Sheet({ open, onClose, title, children, footer, tall = false, wide = false }) {
   const [mounted, setMounted] = useState(open);
   const [visible, setVisible] = useState(false);
   const panel = useRef(null);
@@ -147,7 +147,7 @@ export function Sheet({ open, onClose, title, children, footer, tall = false }) 
   return createPortal(
     <div className={`sheet ${visible ? 'is-open' : ''}`} role="dialog" aria-modal="true" aria-label={title}>
       <div className="sheet__scrim" onClick={onClose} />
-      <div className={`sheet__panel ${tall ? 'sheet__panel--tall' : ''}`} ref={panel}
+      <div className={`sheet__panel ${tall ? 'sheet__panel--tall' : ''} ${wide ? 'sheet__panel--wide' : ''}`} ref={panel}
         onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}>
         <div className="sheet__grab" />
         {title && <div className="sheet__head">

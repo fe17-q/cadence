@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import { one, all, run, id, token, tx } from './db.js';
 import { encrypt, decrypt, normalizeBaseUrl, listCourses, syncTeam, syncAll } from './canvas.js';
 import { notifyUser, runReminders, vapidPublicKey } from './notify.js';
+import * as google from './google.js';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -19,7 +20,7 @@ const SESSION_DAYS = 120;
 const wrap = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 class HttpError extends Error { constructor(status, msg) { super(msg); this.status = status; } }
 const bad = (msg, status = 400) => { throw new HttpError(status, msg); };
-const publicUser = u => u && ({ id: u.id, name: u.name, email: u.email, color: u.color });
+const publicUser = u => u && ({ id: u.id, name: u.name, email: u.email, color: u.color, google_email: u.google_email || null });
 
 function startSession(res, userId) {
   const t = token();
@@ -53,8 +54,10 @@ function throttle(key) {
 }
 
 function joinTeam(teamId, userId, role = 'member') {
-  run('INSERT OR IGNORE INTO memberships (team_id, user_id, role) VALUES (?,?,?)', teamId, userId, role);
+  const r = run('INSERT OR IGNORE INTO memberships (team_id, user_id, role) VALUES (?,?,?)', teamId, userId, role);
+  if (r.changes) google.shareWithTeam(teamId).catch(() => {}); // give the newcomer access to the team Drive folder
 }
+const origin = req => process.env.PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
 
 function teamSummary(t, userId) {
   const m = one('SELECT role FROM memberships WHERE team_id=? AND user_id=?', t.id, userId);
@@ -64,6 +67,10 @@ function teamSummary(t, userId) {
       mode: t.canvas_token ? 'token' : t.ical_url ? 'ical' : null,
       base_url: t.canvas_base_url, course_ids: JSON.parse(t.canvas_course_ids || '[]'),
       ical_filter: t.ical_filter, last_synced_at: t.last_synced_at, error: t.sync_error,
+    },
+    google: {
+      connected: !!t.google_refresh_token, email: t.google_email, folder_url: t.google_folder_url,
+      error: t.google_error, connected_by: one('SELECT name FROM users WHERE id=?', t.google_connected_by)?.name || null,
     },
   };
 }
@@ -118,6 +125,12 @@ app.get('/api/me', auth, (req, res) => {
 app.patch('/api/me', auth, wrap(async (req, res) => {
   const name = req.body.name != null ? String(req.body.name).trim() : null;
   if (name) run('UPDATE users SET name=? WHERE id=?', name, req.user.id);
+  if (req.body.google_email !== undefined) {
+    const g = String(req.body.google_email || '').trim().toLowerCase();
+    if (g && !/^\S+@\S+\.\S+$/.test(g)) bad('That Google email doesn\'t look right');
+    run('UPDATE users SET google_email=? WHERE id=?', g || null, req.user.id);
+    for (const m of all('SELECT team_id FROM memberships WHERE user_id=?', req.user.id)) google.shareWithTeam(m.team_id).catch(() => {});
+  }
   if (req.body.color && PALETTE.includes(req.body.color)) run('UPDATE users SET color=? WHERE id=?', req.body.color, req.user.id);
   res.json({ user: publicUser(one('SELECT * FROM users WHERE id=?', req.user.id)) });
 }));
@@ -173,13 +186,14 @@ app.delete('/api/teams/:tid/members/:uid', auth, (req, res) => {
 app.get('/api/teams/:tid/board', auth, (req, res) => {
   member(req.params.tid, req.user.id);
   const team = one('SELECT * FROM teams WHERE id=?', req.params.tid);
-  const members = all(`SELECT u.id, u.name, u.email, u.color, m.role FROM users u JOIN memberships m ON m.user_id=u.id
+  const members = all(`SELECT u.id, u.name, u.email, u.google_email, u.color, m.role FROM users u JOIN memberships m ON m.user_id=u.id
                        WHERE m.team_id=? ORDER BY m.joined_at`, team.id);
   const assignments = all('SELECT * FROM assignments WHERE team_id=? ORDER BY due_at IS NULL, due_at', team.id)
     .map(a => ({ ...a, attachments: JSON.parse(a.attachments || '[]') }));
   const tasks = all(`SELECT k.* FROM tasks k JOIN assignments a ON a.id=k.assignment_id WHERE a.team_id=? ORDER BY k.position, k.created_at`, team.id)
     .map(k => ({ ...k, done: !!k.done }));
-  res.json({ team: teamSummary(team, req.user.id), members, assignments, tasks });
+  const docs = all('SELECT * FROM docs WHERE team_id=? ORDER BY created_at DESC', team.id);
+  res.json({ team: teamSummary(team, req.user.id), members, assignments, tasks, docs });
 });
 
 // ---------- Canvas ----------
@@ -310,6 +324,91 @@ app.delete('/api/tasks/:id', auth, (req, res) => {
   const k = taskOrThrow(req.params.id);
   member(teamOfAssignment(k.assignment_id).team_id, req.user.id);
   run('DELETE FROM tasks WHERE id=?', k.id);
+  res.json({ ok: true });
+});
+
+// ---------- Google Docs / Drive ----------
+app.get('/api/config', (req, res) => res.json({ google: google.publicGoogleConfig() }));
+
+app.post('/api/teams/:tid/google/connect', auth, (req, res) => {
+  member(req.params.tid, req.user.id);
+  if (!google.googleEnabled()) bad('Google isn\'t set up on this server yet');
+  res.json({ url: google.authUrl({ teamId: req.params.tid, userId: req.user.id, origin: origin(req) }) });
+});
+
+app.get('/api/google/callback', wrap(async (req, res) => {
+  if (req.query.error) return res.redirect('/team?google_error=' + encodeURIComponent('Google connection was cancelled'));
+  try { await google.handleCallback({ code: req.query.code, state: req.query.state }); res.redirect('/team?google=connected'); }
+  catch (e) { res.redirect('/team?google_error=' + encodeURIComponent(e.message)); }
+}));
+
+app.delete('/api/teams/:tid/google', auth, (req, res) => {
+  member(req.params.tid, req.user.id);
+  run('UPDATE teams SET google_refresh_token=NULL, google_error=NULL WHERE id=?', req.params.tid);
+  res.json({ team: teamSummary(one('SELECT * FROM teams WHERE id=?', req.params.tid), req.user.id) });
+});
+
+function checkTargets(teamId, b) {
+  const aid = b.assignment_id || null, kid = b.task_id || null;
+  if (aid && one('SELECT team_id FROM assignments WHERE id=?', aid)?.team_id !== teamId) bad('Assignment not found', 404);
+  if (kid) {
+    const k = taskOrThrow(kid);
+    if (one('SELECT team_id FROM assignments WHERE id=?', k.assignment_id).team_id !== teamId) bad('Task not found', 404);
+    return { aid: aid || k.assignment_id, kid };
+  }
+  return { aid, kid };
+}
+
+app.post('/api/teams/:tid/docs', auth, wrap(async (req, res) => {
+  member(req.params.tid, req.user.id);
+  const team = one('SELECT * FROM teams WHERE id=?', req.params.tid);
+  const link = google.parseLink(req.body.url) || bad('Paste a full link, like https://docs.google.com/…');
+  const { aid, kid } = checkTargets(team.id, req.body);
+  let title = String(req.body.title || '').trim();
+  let kind = req.body.kind || link.kind;
+  if (!title || !req.body.kind) {
+    const meta = await google.lookup(team, link.googleId);
+    if (meta) { title = title || meta.name; if (link.kind === 'file') kind = google.kindFromMime(meta.mimeType); }
+  }
+  const did = id();
+  run(`INSERT INTO docs (id, team_id, assignment_id, task_id, url, title, kind, google_id, source, created_by) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+    did, team.id, aid, kid, link.url, (title || link.defaultTitle).slice(0, 200), kind, link.googleId, req.body.source === 'picked' ? 'picked' : 'link', req.user.id);
+  res.json({ doc: one('SELECT * FROM docs WHERE id=?', did) });
+}));
+
+app.post('/api/teams/:tid/docs/create', auth, wrap(async (req, res) => {
+  member(req.params.tid, req.user.id);
+  const team = one('SELECT * FROM teams WHERE id=?', req.params.tid);
+  if (!team.google_refresh_token) bad('Connect Google Drive first');
+  const { aid, kid } = checkTargets(team.id, req.body);
+  const a = aid ? one('SELECT * FROM assignments WHERE id=?', aid) : null;
+  const t = kid ? one('SELECT * FROM tasks WHERE id=?', kid) : null;
+  const kind = req.body.kind;
+  const label = { doc: 'Notes', sheet: 'Sheet', slides: 'Slides' }[kind] || 'Doc';
+  const title = String(req.body.title || '').trim() || [t?.title || a?.title, label].filter(Boolean).join(' · ') || `${team.name} ${label}`;
+  try {
+    const f = await google.createFile(team, { kind, title, assignment: a });
+    const did = id();
+    run(`INSERT INTO docs (id, team_id, assignment_id, task_id, url, title, kind, google_id, source, created_by) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+      did, team.id, aid, kid, f.webViewLink, f.name, kind, f.id, 'created', req.user.id);
+    res.json({ doc: one('SELECT * FROM docs WHERE id=?', did) });
+  } catch (e) { bad(e.status === 401 || e.status === 403 ? 'Google access expired. Reconnect Google Drive on the Team page.' : `Couldn't create the file: ${e.message}`); }
+}));
+
+app.patch('/api/docs/:id', auth, (req, res) => {
+  const d = one('SELECT * FROM docs WHERE id=?', req.params.id) || bad('Doc not found', 404);
+  member(d.team_id, req.user.id);
+  const title = req.body.title != null ? String(req.body.title).trim() || d.title : d.title;
+  let { aid, kid } = { aid: d.assignment_id, kid: d.task_id };
+  if (req.body.assignment_id !== undefined || req.body.task_id !== undefined) ({ aid, kid } = checkTargets(d.team_id, req.body));
+  run('UPDATE docs SET title=?, assignment_id=?, task_id=? WHERE id=?', title, aid, kid, d.id);
+  res.json({ doc: one('SELECT * FROM docs WHERE id=?', d.id) });
+});
+
+app.delete('/api/docs/:id', auth, (req, res) => {
+  const d = one('SELECT * FROM docs WHERE id=?', req.params.id) || bad('Doc not found', 404);
+  member(d.team_id, req.user.id);
+  run('DELETE FROM docs WHERE id=?', d.id); // unlinks only; the file stays in Drive
   res.json({ ok: true });
 });
 

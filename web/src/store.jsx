@@ -51,6 +51,8 @@ export function StoreProvider({ children }) {
   }, []);
 
   useEffect(() => { loadMe(); }, [loadMe]);
+  const [config, setConfig] = useState({ google: { enabled: false } });
+  useEffect(() => { get('/config').then(setConfig).catch(() => {}); }, []);
 
   // pick a valid team
   const team = useMemo(() => {
@@ -120,6 +122,24 @@ export function StoreProvider({ children }) {
       await del(`/assignments/${id}`);
       setBoard(b => b && ({ ...b, assignments: b.assignments.filter(a => a.id !== id), tasks: b.tasks.filter(t => t.assignment_id !== id) }));
     },
+    async addDoc(fields) {
+      const { doc } = await post(`/teams/${team.id}/docs`, fields);
+      setBoard(b => b && ({ ...b, docs: [doc, ...(b.docs || [])] }));
+      return doc;
+    },
+    async createDoc(fields) {
+      const { doc } = await post(`/teams/${team.id}/docs/create`, fields);
+      setBoard(b => b && ({ ...b, docs: [doc, ...(b.docs || [])] }));
+      return doc;
+    },
+    async updateDoc(id, fields) {
+      const { doc } = await patch(`/docs/${id}`, fields);
+      setBoard(b => b && ({ ...b, docs: b.docs.map(d => d.id === id ? doc : d) }));
+    },
+    async removeDoc(id) {
+      setBoard(b => b && ({ ...b, docs: b.docs.filter(d => d.id !== id) }));
+      try { await del(`/docs/${id}`); } catch (e) { toast(e.message, { tone: 'error' }); refresh(); }
+    },
     async sync() {
       const r = await post(`/teams/${team.id}/sync`);
       await Promise.all([refresh(), loadMe()]);
@@ -128,7 +148,7 @@ export function StoreProvider({ children }) {
   }), [team?.id, board, refresh, loadMe, toast]);
 
   const value = {
-    path, navigate, toasts, toast,
+    path, navigate, toasts, toast, config,
     me, loadMe, setMe, user: me?.user, teams: me?.teams || [], team, setTeamId,
     board, refresh, ...actions,
   };
