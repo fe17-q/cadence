@@ -188,43 +188,51 @@ const loadScript = src => new Promise((res, rej) => {
   const s = document.createElement('script'); s.src = src; s.async = true; s.onload = res; s.onerror = rej; document.head.appendChild(s);
 });
 
+// Opens the Google Picker with a short-lived token for whoever is using the app.
+async function openPicker({ config, hint, title, build, onPicked }) {
+  await Promise.all([loadScript('https://apis.google.com/js/api.js'), loadScript('https://accounts.google.com/gsi/client')]);
+  await new Promise(r => window.gapi.load('picker', r));
+  const token = await new Promise((resolve, reject) => {
+    const client = window.google.accounts.oauth2.initTokenClient({
+      client_id: config.google.clientId, scope: 'https://www.googleapis.com/auth/drive.file',
+      ...(hint ? { login_hint: hint, hint } : {}),
+      callback: r => (r.error ? reject(new Error(r.error)) : resolve(r.access_token)),
+    });
+    client.requestAccessToken({ prompt: '' });
+  });
+  const gp = window.google.picker;
+  const b = new gp.PickerBuilder()
+    .setOAuthToken(token).setDeveloperKey(config.google.apiKey).setAppId(config.google.appId || '')
+    .setTitle(title)
+    .setCallback(data => { if (data.action === gp.Action.PICKED) onPicked(data.docs, token); });
+  build(b, gp);
+  b.build().setVisible(true);
+}
+
 function usePicker({ assignmentId, taskId }) {
   const { config, board, user, addDoc, toast } = useStore();
   return async function pick() {
     try {
-      await Promise.all([loadScript('https://apis.google.com/js/api.js'), loadScript('https://accounts.google.com/gsi/client')]);
-      await new Promise(r => window.gapi.load('picker', r));
-      const token = await new Promise((resolve, reject) => {
-        const client = window.google.accounts.oauth2.initTokenClient({
-          client_id: config.google.clientId, scope: 'https://www.googleapis.com/auth/drive.file',
-          callback: r => (r.error ? reject(new Error(r.error)) : resolve(r.access_token)),
-        });
-        client.requestAccessToken({ prompt: '' });
-      });
-      const gp = window.google.picker;
-      const view = new gp.DocsView().setIncludeFolders(true).setOwnedByMe(false);
-      const picker = new gp.PickerBuilder()
-        .addView(view).addView(new gp.DocsView().setIncludeFolders(true).setOwnedByMe(true))
-        .enableFeature(gp.Feature.MULTISELECT_ENABLED)
-        .setOAuthToken(token).setDeveloperKey(config.google.apiKey).setAppId(config.google.appId || '')
-        .setTitle('Add files to Cadence')
-        .setCallback(async data => {
-          if (data.action !== gp.Action.PICKED) return;
-          for (const f of data.docs) {
+      await openPicker({
+        config, title: 'Add files to Cadence',
+        build: (b, gp) => b.addView(new gp.DocsView().setIncludeFolders(true).setOwnedByMe(false))
+          .addView(new gp.DocsView().setIncludeFolders(true).setOwnedByMe(true))
+          .enableFeature(gp.Feature.MULTISELECT_ENABLED),
+        onPicked: async (docs, token) => {
+          for (const f of docs) {
             await addDoc({ url: f.url, title: f.name, kind: MIME_KIND[f.mimeType] || 'file', source: 'picked', assignment_id: assignmentId, task_id: taskId });
             // share with teammates so nobody hits "Request access"
             for (const m of board.members) {
               if (m.id === user.id) continue;
-              fetch(`https://www.googleapis.com/drive/v3/files/${f.id}/permissions?sendNotificationEmail=false`, {
+              fetch(`https://www.googleapis.com/drive/v3/files/${f.id}/permissions?sendNotificationEmail=false&supportsAllDrives=true`, {
                 method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify({ role: 'writer', type: 'user', emailAddress: m.google_email || m.email }),
               }).catch(() => {});
             }
           }
-          toast(`${data.docs.length} file${data.docs.length > 1 ? 's' : ''} added and shared with the team`);
-        })
-        .build();
-      picker.setVisible(true);
+          toast(`${docs.length} file${docs.length > 1 ? 's' : ''} added and shared with the team`);
+        },
+      });
     } catch (e) { toast(e.message || 'Couldn\'t open Google Drive', { tone: 'error' }); }
   };
 }
@@ -355,6 +363,23 @@ export function GooglePanel() {
       </div>
     );
   }
+  const chooseFolder = async () => {
+    try {
+      await openPicker({
+        config, hint: g.email, title: 'Choose your team folder',
+        build: (b, gp) => b
+          .addView(new gp.DocsView(gp.ViewId.FOLDERS).setIncludeFolders(true).setSelectFolderEnabled(true).setOwnedByMe(true))
+          .addView(new gp.DocsView(gp.ViewId.FOLDERS).setIncludeFolders(true).setSelectFolderEnabled(true).setOwnedByMe(false))
+          .addView(new gp.DocsView(gp.ViewId.FOLDERS).setIncludeFolders(true).setSelectFolderEnabled(true).setEnableDrives(true)),
+        onPicked: async docs => {
+          setBusy(true);
+          try { await post(`/teams/${team.id}/google/folder`, { folder_id: docs[0].id }); await loadMe(); toast(`New docs will go in “${docs[0].name}” ✨`); }
+          catch (e) { toast(e.message, { tone: 'error', duration: 7000 }); }
+          finally { setBusy(false); }
+        },
+      });
+    } catch (e) { toast(e.message || 'Couldn\'t open Google Drive', { tone: 'error' }); }
+  };
   const connect = async () => {
     setBusy(true);
     try { const { url } = await post(`/teams/${team.id}/google/connect`); location.href = url; }
@@ -367,12 +392,13 @@ export function GooglePanel() {
         <div className="panel__text">
           <strong>{g.connected ? (g.error ? 'Google needs reconnecting' : 'Google Drive connected') : 'Google Drive'}</strong>
           <span>{g.connected
-            ? (g.error || `Team folder lives in ${g.email || 'your'} Drive and is shared with everyone on the team.`)
+            ? (g.error || <>New docs go in <b>{g.folder_name || 'your team folder'}</b>, one subfolder per assignment, shared with everyone on the team.</>)
             : 'Connect once to create Docs, Sheets and Slides from any assignment, in a folder the whole team can edit.'}</span>
         </div>
       </div>
       <div className="row">
-        {g.connected && g.folder_url && <a className="btn btn--ghost" href={g.folder_url} target="_blank" rel="noopener">Open team folder</a>}
+        {g.connected && g.folder_url && <a className="btn btn--ghost" href={g.folder_url} target="_blank" rel="noopener">Open folder</a>}
+        {g.connected && !g.error && <Button variant="ghost" loading={busy} onClick={chooseFolder}>Use a different folder</Button>}
         {(!g.connected || g.error) && <Button loading={busy} onClick={connect}>{g.connected ? 'Reconnect' : 'Connect Google Drive'}</Button>}
       </div>
       {g.connected && !g.error && <button className="link-btn left" onClick={async () => { if (!confirm('Disconnect Google Drive? Linked docs stay, but you won\'t be able to create new ones.')) return; await del(`/teams/${team.id}/google`); loadMe(); }}>Disconnect</button>}

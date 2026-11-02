@@ -123,7 +123,7 @@ const FIELDS = 'id,name,mimeType,webViewLink,iconLink,modifiedTime';
 
 async function createFolder(team, name, parent) {
   return gapi(team, '/drive/v3/files', {
-    method: 'POST', query: { fields: FIELDS },
+    method: 'POST', query: { fields: FIELDS, supportsAllDrives: 'true' },
     body: { name, mimeType: 'application/vnd.google-apps.folder', ...(parent ? { parents: [parent] } : {}) },
   });
 }
@@ -132,7 +132,7 @@ export async function shareFolderWith(team, email) {
   if (!team.google_folder_id || !email || email.toLowerCase() === (team.google_email || '').toLowerCase()) return;
   try {
     await gapi(team, `/drive/v3/files/${team.google_folder_id}/permissions`, {
-      method: 'POST', query: { sendNotificationEmail: 'false' },
+      method: 'POST', query: { sendNotificationEmail: 'false', supportsAllDrives: 'true' },
       body: { role: 'writer', type: 'user', emailAddress: email },
     });
   } catch (e) { console.warn('share failed', email, e.message); }
@@ -156,10 +156,28 @@ export async function handleCallback({ code, state }) {
   let team = one('SELECT * FROM teams WHERE id=?', s.teamId);
   if (!team.google_folder_id) {
     const f = await createFolder(team, `${team.name} · Cadence`);
-    run('UPDATE teams SET google_folder_id=?, google_folder_url=? WHERE id=?', f.id, f.webViewLink || `https://drive.google.com/drive/folders/${f.id}`, team.id);
+    run('UPDATE teams SET google_folder_id=?, google_folder_url=?, google_folder_name=? WHERE id=?', f.id, f.webViewLink || `https://drive.google.com/drive/folders/${f.id}`, f.name || null, team.id);
   }
   await shareWithTeam(team.id);
   return s;
+}
+
+// Switch the team folder to one the team already uses. With the drive.file scope the server can only
+// reach it once the connected account has picked it in the Picker, so a 404 means someone else picked it.
+export async function useFolder(team, folderId) {
+  if (!/^[\w-]{5,}$/.test(folderId)) throw Object.assign(new Error('Pick a folder'), { status: 400 });
+  let f;
+  try { f = await gapi(team, `/drive/v3/files/${folderId}`, { query: { fields: FIELDS, supportsAllDrives: 'true' } }); }
+  catch (e) {
+    if (e.status === 404 || e.status === 403) throw Object.assign(new Error(`Pick the folder while signed in to Google as ${team.google_email || 'the account that connected Drive'}.`), { status: 400 });
+    throw e;
+  }
+  if (f.mimeType !== 'application/vnd.google-apps.folder') throw Object.assign(new Error('That isn\'t a folder'), { status: 400 });
+  run('UPDATE teams SET google_folder_id=?, google_folder_url=?, google_folder_name=? WHERE id=?',
+    f.id, f.webViewLink || `https://drive.google.com/drive/folders/${f.id}`, f.name, team.id);
+  // new docs go into fresh per-assignment subfolders inside the chosen folder; existing docs stay where they are
+  run('UPDATE assignments SET google_folder_id=NULL WHERE team_id=?', team.id);
+  await shareWithTeam(team.id);
 }
 
 // Each assignment gets its own subfolder, created lazily.
@@ -176,7 +194,7 @@ const MIME = { doc: 'application/vnd.google-apps.document', sheet: 'application/
 export async function createFile(team, { kind, title, assignment }) {
   if (!MIME[kind]) throw new Error('Unsupported file type');
   const parent = await assignmentFolder(team, assignment);
-  return gapi(team, '/drive/v3/files', { method: 'POST', query: { fields: FIELDS }, body: { name: title, mimeType: MIME[kind], parents: [parent] } });
+  return gapi(team, '/drive/v3/files', { method: 'POST', query: { fields: FIELDS, supportsAllDrives: 'true' }, body: { name: title, mimeType: MIME[kind], parents: [parent] } });
 }
 
 // Best-effort metadata lookup (works for files Cadence created or that were picked for it).

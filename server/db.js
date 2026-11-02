@@ -106,7 +106,7 @@ CREATE INDEX IF NOT EXISTS idx_notif_user ON notifications(user_id, created_at);
 const cols = t => db.prepare(`PRAGMA table_info(${t})`).all().map(c => c.name);
 const addCol = (t, c, type = 'TEXT') => { if (!cols(t).includes(c)) db.exec(`ALTER TABLE ${t} ADD COLUMN ${c} ${type}`); };
 addCol('teams', 'tz');
-for (const c of ['google_refresh_token', 'google_email', 'google_connected_by', 'google_folder_id', 'google_folder_url', 'google_error']) addCol('teams', c);
+for (const c of ['google_refresh_token', 'google_email', 'google_connected_by', 'google_folder_id', 'google_folder_url', 'google_folder_name', 'google_error']) addCol('teams', c);
 addCol('assignments', 'google_folder_id');
 addCol('users', 'google_email');
 db.exec(`

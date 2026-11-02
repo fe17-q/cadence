@@ -69,7 +69,7 @@ function teamSummary(t, userId) {
       ical_filter: t.ical_filter, last_synced_at: t.last_synced_at, error: t.sync_error,
     },
     google: {
-      connected: !!t.google_refresh_token, email: t.google_email, folder_url: t.google_folder_url,
+      connected: !!t.google_refresh_token, email: t.google_email, folder_url: t.google_folder_url, folder_name: t.google_folder_name,
       error: t.google_error, connected_by: one('SELECT name FROM users WHERE id=?', t.google_connected_by)?.name || null,
     },
   };
@@ -340,6 +340,15 @@ app.get('/api/google/callback', wrap(async (req, res) => {
   if (req.query.error) return res.redirect('/team?google_error=' + encodeURIComponent('Google connection was cancelled'));
   try { await google.handleCallback({ code: req.query.code, state: req.query.state }); res.redirect('/team?google=connected'); }
   catch (e) { res.redirect('/team?google_error=' + encodeURIComponent(e.message)); }
+}));
+
+// Point Cadence at an existing Drive folder (picked with the Google Picker by the connected account).
+app.post('/api/teams/:tid/google/folder', auth, wrap(async (req, res) => {
+  member(req.params.tid, req.user.id);
+  const team = one('SELECT * FROM teams WHERE id=?', req.params.tid);
+  if (!team.google_refresh_token) bad('Connect Google Drive first');
+  await google.useFolder(team, String(req.body.folder_id || ''));
+  res.json({ team: teamSummary(one('SELECT * FROM teams WHERE id=?', team.id), req.user.id) });
 }));
 
 app.delete('/api/teams/:tid/google', auth, (req, res) => {
