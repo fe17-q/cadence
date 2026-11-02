@@ -93,7 +93,15 @@ function decodeEntities(s) {
 
 // Upsert one imported assignment. Returns 'new' | 'updated' | 'same'.
 function upsert(teamId, a) {
-  const existing = one('SELECT * FROM assignments WHERE team_id=? AND source=? AND external_id=?', teamId, a.source, a.external_id);
+  let existing = one('SELECT * FROM assignments WHERE team_id=? AND source=? AND external_id=?', teamId, a.source, a.external_id);
+  // Switching from the calendar feed to a token: adopt the feed's row (uid "event-assignment-<id>") so tasks and docs carry over.
+  if (!existing && a.source === 'canvas') {
+    const fromFeed = one("SELECT * FROM assignments WHERE team_id=? AND source='ical' AND external_id=?", teamId, `event-assignment-${a.external_id}`);
+    if (fromFeed) {
+      run("UPDATE assignments SET source='canvas', external_id=? WHERE id=?", a.external_id, fromFeed.id);
+      existing = { ...fromFeed, source: 'canvas', external_id: a.external_id };
+    }
+  }
   const attachments = JSON.stringify(a.attachments || []);
   if (!existing) {
     run(`INSERT INTO assignments (id, team_id, source, external_id, title, description_html, due_at, points, html_url, course_name, attachments)
