@@ -109,6 +109,12 @@ addCol('teams', 'tz');
 for (const c of ['google_refresh_token', 'google_email', 'google_connected_by', 'google_folder_id', 'google_folder_url', 'google_folder_name', 'google_error']) addCol('teams', c);
 addCol('assignments', 'google_folder_id');
 addCol('users', 'google_email');
+db.exec(`CREATE TABLE IF NOT EXISTS password_resets (
+  token_hash TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  expires_at INTEGER NOT NULL,
+  used_at INTEGER
+)`);
 db.exec(`
 CREATE TABLE IF NOT EXISTS docs (
   id TEXT PRIMARY KEY,

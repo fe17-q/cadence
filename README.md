@@ -33,6 +33,13 @@ To try Canvas sync without a real token, run the fake Canvas server with `node s
 
 To test locally without Google: `node scripts/mock-google.js` and point the app at it (see the comment at the top of that file).
 
+## Password reset emails (one time, about 5 minutes)
+
+1. Create a free account at brevo.com (300 emails a day).
+2. Under Senders, add and verify the address the emails should come from (a Gmail is fine).
+3. Under SMTP & API → API keys, create a key.
+4. Set `BREVO_API_KEY` and `MAIL_FROM` (for example `Cadence <you@gmail.com>`). "Forgot password?" appears on the sign-in screen once both are set.
+
 ## Deploy
 
 It's one Node process with a SQLite database, so it needs an always-on host with a persistent disk (the background sync and reminders run inside the server). The included `Dockerfile` works on Railway, Fly.io or Render; mount a volume at `/data` and set `APP_SECRET`. See `.env.example`.

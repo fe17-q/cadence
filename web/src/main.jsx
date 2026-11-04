@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import './styles.css';
 import { StoreProvider, useStore } from './store.jsx';
 import { Icon, Spinner, Toasts } from './ui.jsx';
-import { AuthScreen, CreateTeamScreen, JoinScreen } from './screens/Auth.jsx';
+import { AuthScreen, CreateTeamScreen, JoinScreen, ResetScreen } from './screens/Auth.jsx';
 import { TodayScreen } from './screens/Today.jsx';
 import { AssignmentsScreen } from './screens/Assignments.jsx';
 import { AssignmentScreen } from './screens/Assignment.jsx';
@@ -39,6 +39,8 @@ function Shell() {
     else if (params.get('google_error')) { toast(params.get('google_error'), { tone: 'error', duration: 6000 }); navigate(pathname, { replace: true }); }
   }, [query]);
 
+  const reset = /^\/reset\/([\w-]+)/.exec(pathname)?.[1];
+  if (reset) return <><ResetScreen token={reset} /><Toasts toasts={toasts} /></>;
   if (me === undefined) return <Splash />;
   if (me === null) return <><AuthScreen invite={join} /><Toasts toasts={toasts} /></>;
   if (join) return <><JoinScreen code={join} /><Toasts toasts={toasts} /></>;

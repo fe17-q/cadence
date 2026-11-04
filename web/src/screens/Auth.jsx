@@ -22,7 +22,8 @@ function Field({ label, ...props }) {
 }
 
 export function AuthScreen({ invite }) {
-  const { loadMe, navigate, setTeamId } = useStore();
+  const { loadMe, navigate, setTeamId, config } = useStore();
+  const [sent, setSent] = useState(false);
   const [mode, setMode] = useState(invite ? 'signup' : 'welcome');
   const [form, setForm] = useState({ name: '', email: '', password: '' });
   const [error, setError] = useState('');
@@ -39,6 +40,7 @@ export function AuthScreen({ invite }) {
     e.preventDefault();
     setError(''); setBusy(true);
     try {
+      if (mode === 'forgot') { await post('/auth/forgot', { email: form.email }); setSent(true); return; }
       const r = await post(mode === 'signup' ? '/auth/signup' : '/auth/login', { ...form, invite });
       if (r.teamId) setTeamId(r.teamId);
       await loadMe();
@@ -70,12 +72,26 @@ export function AuthScreen({ invite }) {
               <Button variant="ghost" onClick={() => setMode('login')}>I already have an account</Button>
             </div>
           </div>
+        ) : mode === 'forgot' ? (
+          <form className="auth__form fade-up" onSubmit={submit}>
+            <h1 className="display display--sm">{sent ? 'Check your email' : 'Reset your password'}</h1>
+            {sent ? (
+              <p className="auth__lede">If <b>{form.email}</b> has a Cadence account, a reset link is on its way. It expires in 1 hour, and it might land in spam.</p>
+            ) : (<>
+              <p className="auth__lede">Enter the email you signed up with and we'll send you a link to choose a new password.</p>
+              <Field label="Email" type="email" autoComplete="email" inputMode="email" value={form.email} onChange={set('email')} placeholder="you@school.edu" autoFocus />
+              {error && <p className="form-error">{error}</p>}
+              <Button type="submit" loading={busy}>Send reset link</Button>
+            </>)}
+            <button type="button" className="link-btn" onClick={() => { setMode('login'); setSent(false); setError(''); }}>Back to sign in</button>
+          </form>
         ) : (
           <form className="auth__form fade-up" onSubmit={submit}>
             {!invite && <h1 className="display display--sm">{mode === 'signup' ? 'Create your account' : 'Welcome back'}</h1>}
             {mode === 'signup' && <Field label="Your name" autoComplete="name" value={form.name} onChange={set('name')} placeholder="Fernando Quijada" autoFocus />}
             <Field label="Email" type="email" autoComplete="email" inputMode="email" value={form.email} onChange={set('email')} placeholder="you@school.edu" autoFocus={mode === 'login'} />
             <Field label="Password" type="password" autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} value={form.password} onChange={set('password')} placeholder={mode === 'signup' ? 'At least 6 characters' : ''} />
+            {mode === 'login' && config.mail && <button type="button" className="link-btn link-btn--right" onClick={() => { setMode('forgot'); setError(''); }}>Forgot password?</button>}
             {error && <p className="form-error">{error}</p>}
             <Button type="submit" loading={busy}>{mode === 'signup' ? (invite ? 'Join the team' : 'Create account') : 'Sign in'}</Button>
             <button type="button" className="link-btn" onClick={() => { setMode(mode === 'signup' ? 'login' : 'signup'); setError(''); }}>
@@ -140,6 +156,45 @@ export function CreateTeamScreen() {
         <Button type="submit" loading={busy}>Create team</Button>
         <p className="muted small center">Got an invite link from a teammate? Just open it and you'll join their team instead.</p>
       </form>
+    </div>
+  );
+}
+
+export function ResetScreen({ token }) {
+  const { loadMe, navigate } = useStore();
+  const [info, setInfo] = useState(null);
+  const [pw, setPw] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { get(`/auth/reset/${token}`).then(setInfo).catch(e => setInfo({ error: e.message })); }, [token]);
+  async function submit(e) {
+    e.preventDefault(); setError(''); setBusy(true);
+    try { await post('/auth/reset', { token, password: pw }); await loadMe(); navigate('/', { replace: true }); }
+    catch (err) { setError(err.message); }
+    finally { setBusy(false); }
+  }
+  return (
+    <div className="auth">
+      <div className="auth__glow" />
+      <div className="auth__inner">
+        <Brand />
+        {!info ? <Spinner /> : info.error ? (
+          <div className="auth__form fade-up">
+            <h1 className="display display--sm">Link expired</h1>
+            <p className="auth__lede">{info.error}</p>
+            <Button onClick={() => navigate('/', { replace: true })}>Back to sign in</Button>
+          </div>
+        ) : (
+          <form className="auth__form fade-up" onSubmit={submit}>
+            <h1 className="display display--sm">Choose a new password</h1>
+            <p className="auth__lede">For <b>{info.email}</b></p>
+            <input type="email" autoComplete="username" value={info.email} readOnly hidden />
+            <Field label="New password" type="password" autoComplete="new-password" value={pw} onChange={e => setPw(e.target.value)} placeholder="At least 6 characters" autoFocus />
+            {error && <p className="form-error">{error}</p>}
+            <Button type="submit" loading={busy}>Save and sign in</Button>
+          </form>
+        )}
+      </div>
     </div>
   );
 }

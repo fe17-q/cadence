@@ -190,6 +190,7 @@ input, textarea { font: inherit; color: inherit; }
 .link-btn { color: var(--text-2); font-size: 14px; padding: 8px; display: inline-flex; align-items: center; gap: 6px; justify-content: center; }
 .link-btn:hover { color: var(--text); }
 .link-btn.left { justify-content: flex-start; padding-left: 0; }
+.link-btn--right { align-self: flex-end; margin-top: -10px; padding: 4px 0; font-size: 13px; }
 .danger-link { color: var(--late); font-size: 14px; display: inline-flex; gap: 8px; align-items: center; padding: 10px 0; opacity: 0.9; }
 
 .spinner { display: inline-block; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: spin 0.7s linear infinite; opacity: 0.8; }

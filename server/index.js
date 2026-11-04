@@ -7,6 +7,8 @@ import { one, all, run, id, token, tx } from './db.js';
 import { encrypt, decrypt, normalizeBaseUrl, listCourses, syncTeam, syncAll } from './canvas.js';
 import { notifyUser, runReminders, vapidPublicKey } from './notify.js';
 import * as google from './google.js';
+import { sendMail, mailEnabled } from './mail.js';
+import crypto from 'node:crypto';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -109,6 +111,59 @@ app.post('/api/auth/login', wrap(async (req, res) => {
   }
   startSession(res, u.id);
   res.json({ ok: true, teamId });
+}));
+
+// ---------- password reset ----------
+const sha = t => crypto.createHash('sha256').update(t).digest('hex');
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+app.post('/api/auth/forgot', wrap(async (req, res) => {
+  throttle('forgot:' + req.ip);
+  if (!mailEnabled()) bad('Password reset emails aren\'t set up on this server yet.', 503);
+  const email = String(req.body.email || '').trim().toLowerCase();
+  throttle('forgot:' + email);
+  const u = email && one('SELECT * FROM users WHERE email=?', email);
+  if (u) {
+    const t = token(32);
+    run('DELETE FROM password_resets WHERE user_id=? OR expires_at < ?', u.id, Date.now());
+    run('INSERT INTO password_resets (token_hash, user_id, expires_at) VALUES (?,?,?)', sha(t), u.id, Date.now() + 60 * 60e3);
+    const link = `${origin(req)}/reset/${t}`;
+    const first = esc(u.name.split(' ')[0]);
+    try {
+      await sendMail({
+        to: u.email, subject: 'Reset your Cadence password',
+        text: `Hi ${u.name.split(' ')[0]},\n\nTap this link to choose a new Cadence password:\n${link}\n\nIt works once and expires in 1 hour. If you didn't ask for this, you can ignore this email.`,
+        html: `<div style="font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;max-width:460px;margin:0 auto;padding:32px 24px;color:#2a2420">
+          <p style="font-family:Georgia,serif;font-size:26px;margin:0 0 20px">Cadence</p>
+          <p style="font-size:16px;line-height:1.5">Hi ${first}, tap below to choose a new password.</p>
+          <p style="margin:28px 0"><a href="${esc(link)}" style="background:#c9a96e;color:#1a1512;text-decoration:none;padding:14px 26px;border-radius:999px;font-weight:600;display:inline-block">Reset password</a></p>
+          <p style="font-size:13px;color:#7a6f66;line-height:1.5">This link works once and expires in 1 hour. If you didn't ask for it, you can ignore this email.</p></div>`,
+      });
+    } catch (e) { console.error(e.message); bad('Couldn\'t send the email right now. Try again in a minute.', 502); }
+  }
+  res.json({ ok: true }); // same answer either way, so this can't be used to probe for accounts
+}));
+
+app.get('/api/auth/reset/:token', (req, res) => {
+  const r = one('SELECT r.*, u.email FROM password_resets r JOIN users u ON u.id=r.user_id WHERE token_hash=?', sha(req.params.token));
+  if (!r || r.used_at || r.expires_at < Date.now()) bad('This reset link has expired or was already used. Request a new one.', 410);
+  res.json({ email: r.email });
+});
+
+app.post('/api/auth/reset', wrap(async (req, res) => {
+  throttle('reset:' + req.ip);
+  const password = String(req.body.password || '');
+  if (password.length < 6) bad('Use at least 6 characters for your password');
+  const r = one('SELECT * FROM password_resets WHERE token_hash=?', sha(String(req.body.token || '')));
+  if (!r || r.used_at || r.expires_at < Date.now()) bad('This reset link has expired or was already used. Request a new one.', 410);
+  const hash = await bcrypt.hash(password, 10);
+  tx(() => {
+    run('UPDATE password_resets SET used_at=? WHERE token_hash=?', Date.now(), r.token_hash);
+    run('UPDATE users SET pw_hash=? WHERE id=?', hash, r.user_id);
+    run('DELETE FROM sessions WHERE user_id=?', r.user_id); // sign out everywhere else
+  });
+  startSession(res, r.user_id);
+  res.json({ ok: true });
 }));
 
 app.post('/api/auth/logout', (req, res) => {
@@ -328,7 +383,7 @@ app.delete('/api/tasks/:id', auth, (req, res) => {
 });
 
 // ---------- Google Docs / Drive ----------
-app.get('/api/config', (req, res) => res.json({ google: google.publicGoogleConfig() }));
+app.get('/api/config', (req, res) => res.json({ google: google.publicGoogleConfig(), mail: mailEnabled() }));
 
 app.post('/api/teams/:tid/google/connect', auth, (req, res) => {
   member(req.params.tid, req.user.id);
